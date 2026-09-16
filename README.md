@@ -2,7 +2,7 @@
 
 Japanese corporate registry — company profiles, government procurement awards, subsidies, patents, certifications, financials and workplace disclosure, keyed on the 13-digit 法人番号 (corporate number). Source: [gBizINFO](https://info.gbiz.go.jp/), Ministry of Economy, Trade and Industry (METI).
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1573+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1576+ live data sources.
 
 ## Tools
 
@@ -11,6 +11,8 @@ Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents 
 - `gbiz_company_procurement(corporate_number, limit?, _apiKey)` — Japanese government contracts awarded: order date, title, amount in yen, awarding ministry.
 - `gbiz_company_subsidies(corporate_number, limit?, _apiKey)` — subsidies and grants received: approval date, programme, amount, granting ministry.
 - `gbiz_company_records(corporate_number, kind, limit?, _apiKey)` — `patent`, `certification`, `commendation`, `finance` or `workplace`.
+
+  **The five kinds do not share one response shape.** `patent`, `certification` and `commendation` come back as a LIST under a key matching the kind, with `returned` and `total_on_record` counts. `finance` and `workplace` are ONE record per company, so they come back as an OBJECT — `finance` under `finance` (accounting standards, the fiscal-year cover page, a `management_index` period series and `major_shareholders`), and workplace statistics under **`workplace_info`**, whose key deliberately does not match its `workplace` kind because that is what the upstream returns. For the object kinds `limit` caps the arrays nested inside, and `total_on_record` is a per-array map rather than a single number.
 
 ## Auth
 
@@ -89,7 +91,7 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1573+ data sources. The
+Both URLs reach the same gateway and the same 1576+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 

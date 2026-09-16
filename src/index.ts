@@ -532,13 +532,21 @@ const INTERNAL_SERVICE_UNREACHABLE_CLASS = 'internal_service_unreachable';
  * retry loop. A property on an Error would be dropped by every one of those
  * paths and the class would work in tests and vanish in production.
  *
- * Written as a sentence rather than a sigil because it is going to be read by
- * whoever gets the error, and "our own service, not a third party" is the
- * single most useful thing to tell them — fetchWithTimeout's own comment
- * (fleet #1047) is about exactly this ambiguity, where blaming a healthy vendor
- * by name sent the next person waiting for an outage that did not exist.
+ * WORDING IS LOAD-BEARING, same rule as labelAge's note in authority.ts. This
+ * string is appended to a pack's thrown Error message (shared/src/http.ts),
+ * and a thrown Error's message is exactly what the gateway hands back to the
+ * caller as `content[0].text` when nothing rewrites it (workers/gateway/src
+ * catches the throw and sets `rawResult.message = stripClassPrefix(error)`,
+ * which does not touch this suffix) — so the original wording,
+ * " [pipeworx-hosted origin — our own service, not a third party]", was not a
+ * theoretical leak: it shipped live on pipeworx-catalog's 522s, 7 times in 6
+ * hours on 2026-09-02 (see tests/golden-internal-service.test.ts), verbatim
+ * naming Pipeworx as the host. check:hosting-claims never caught it because it
+ * did not scan shared/ at all (task #2009). Reworded to describe the
+ * OBSERVATION (the origin did not answer) without a claim about who runs it —
+ * the identical fix labelAge got: drop the possessive, keep the fact.
  */
-const INTERNAL_ORIGIN_MARKER = ' [pipeworx-hosted origin — our own service, not a third party]';
+const INTERNAL_ORIGIN_MARKER = ' [origin did not respond — retry before concluding the named source is down]';
 
 /**
  * Supabase's data plane for a project is `<ref>.supabase.co`, where the ref is
@@ -563,6 +571,17 @@ const SUPABASE_PROJECT_HOST = /^[a-z]{20}\.supabase\.(co|in)$/;
  * hosted on workers.dev, so the suffix says where something runs and not who
  * owns it. Every internal call we actually make goes to a `pipeworx.io`
  * hostname or to our Supabase project, both of which are ownership facts.
+ *
+ * `workers/gateway/src/provenance.ts`'s `OUR_HOSTS` answers the same
+ * question and DOES include `workers.dev` — a documented divergence
+ * (task #2051), not a bug to converge. That list decides what a response may
+ * cite as a data SOURCE, where a false negative (citing our own worker as an
+ * external source) is the hosting-disclosure leak this whole file exists to
+ * prevent, so it errs broad. This one decides who gets BLAMED for a 5xx in
+ * outage metrics read by on-call, where a false positive (crediting our own
+ * infra with a third party's outage) hides the real failure, so it errs
+ * narrow. Same suffix, opposite direction, because they are never called for
+ * the same reason.
  *
  * Returns false on anything unparseable rather than throwing — this runs inside
  * an error path, and an error path that can itself throw turns a diagnosable
@@ -662,6 +681,14 @@ function internalHostMetricsClass(error: string): string | undefined {
  *     {id, errors, message, hojin-infos} and nothing else — no count, no
  *     next-page marker. `limit` caps at 5000 and `page` at 10, so nothing here
  *     ever claims a total it did not receive.
+ *
+ *  5. THE RECORD LEGS DO NOT SHARE ONE SHAPE, though four of five look like
+ *     they do. `/patent`, `/certification` and `/commendation` return an ARRAY
+ *     under a key matching the path segment; `/finance` returns an OBJECT under
+ *     `finance`; `/workplace` returns an OBJECT under `workplace_info` — a key
+ *     that does NOT match its path segment. Treating all five alike is silent:
+ *     the array test just fails and the pack reports "no records" for a company
+ *     that filed plenty. See `RECORD_KINDS`.
  *
  * AND THE ONE THAT WILL BITE A CALLER RATHER THAN A BUILDER — see
  * `gbiz_company_search`: a Latin-script name search does not find the company
@@ -940,7 +967,7 @@ const tools: McpToolExport['tools'] = [
       properties: {
         corporate_number: { type: 'string', description: 'The company: its 13-digit Japanese corporate number (法人番号) or its name — a name is resolved, and the Japanese form resolves far more reliably than a romanised one.' },
         kind: { type: 'string', description: 'Which record set: "patent", "certification", "commendation", "finance" or "workplace".' },
-        limit: { type: 'number', description: 'Records to return, 1-500 (default 50).' },
+        limit: { type: 'number', description: 'Records to return, 1-500 (default 50). For "finance" and "workplace", which are one record per company rather than a list, this caps the arrays nested inside it (e.g. the financial period series).' },
         ...KEY_ARG,
       },
       required: ['corporate_number', 'kind'],
@@ -949,12 +976,34 @@ const tools: McpToolExport['tools'] = [
 ];
 
 const SOURCE = 'gBizINFO, Ministry of Economy, Trade and Industry (METI), Japan';
-const RECORD_KINDS: Record<string, string> = {
-  patent: 'patent',
-  certification: 'certification',
-  commendation: 'commendation',
-  finance: 'finance',
-  workplace: 'workplace',
+/**
+ * The five record kinds, and the two things about them that are not guessable:
+ * the row key is not always the path segment, and the payload is not always an
+ * array.
+ *
+ *  - patent / certification / commendation answer with an ARRAY under a key
+ *    matching the path segment.
+ *  - finance answers with one OBJECT under `finance`:
+ *    {accounting_standards, fiscal_year_cover_page, management_index[],
+ *    major_shareholders[]}.
+ *  - workplace answers with one OBJECT under `workplace_info` — the ONLY leg
+ *    whose row key differs from its path segment.
+ *
+ * Measured live 2026-09-15 on Toyota (1180301018771): patent 91,784 rows,
+ * certification 3, commendation 1, finance an object of 4 keys, workplace_info
+ * an object of 3. Assuming "array under the path segment" for all five is a
+ * SILENT failure, not a crash — Array.isArray() is merely false, the empty
+ * branch fires, and the pack states that gBizINFO holds no finance records for
+ * a company whose filed net sales are 12.6 trillion yen. HTTP 200, confident,
+ * wrong, and nothing to page on (docs/silent-zero-policy.md).
+ */
+type RecordKind = { leg: string; field: string; shape: 'list' | 'object' };
+const RECORD_KINDS: Record<string, RecordKind> = {
+  patent: { leg: 'patent', field: 'patent', shape: 'list' },
+  certification: { leg: 'certification', field: 'certification', shape: 'list' },
+  commendation: { leg: 'commendation', field: 'commendation', shape: 'list' },
+  finance: { leg: 'finance', field: 'finance', shape: 'object' },
+  workplace: { leg: 'workplace', field: 'workplace_info', shape: 'object' },
 };
 
 async function companySearch(args: Record<string, unknown>) {
@@ -1065,6 +1114,67 @@ async function companyLeg(args: Record<string, unknown>, leg: string, field: str
   };
 }
 
+/** True if anything in here is actually filled in — gBizINFO returns the full
+ * key skeleton with null leaves for a company that filed nothing, so "the
+ * object exists" is not the same as "there is data in it". */
+function hasAnyValue(v: unknown): boolean {
+  if (v === null || v === undefined || v === '') return false;
+  if (Array.isArray(v)) return v.some(hasAnyValue);
+  if (typeof v === 'object') return Object.values(v as Record<string, unknown>).some(hasAnyValue);
+  return true;
+}
+
+/**
+ * The object-shaped legs (finance, workplace). One record per company rather
+ * than a list of them, so `limit` has nothing to page — it is applied to the
+ * arrays NESTED inside instead (finance.management_index is a period series,
+ * finance.major_shareholders a top-10), and the untruncated lengths are
+ * reported beside them so a caller can see what was cut.
+ */
+async function companyObjectLeg(args: Record<string, unknown>, leg: string, field: string, label: string) {
+  const token = requireKey(args);
+  const { cn, resolvedFrom } = await corpNumber(args, token);
+  const limit = asInt(args.limit, 50, 1, 500);
+  const rows = await gbizGet(`/v2/hojin/${cn}/${leg}`, token, false);
+  const row = rows[0] ?? {};
+  const raw = row[field];
+  const obj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+
+  if (!obj || !hasAnyValue(obj)) {
+    return {
+      found: false,
+      reason: `no_${field}_records`,
+      hint: `gBizINFO holds no ${label} for ${String(row.name ?? cn)}. The company exists and its profile is available via gbiz_company_profile; it simply has no ${label} on record.`,
+      corporate_number: cn,
+      name: row.name ?? null,
+      ...(resolvedFrom ? { resolved_from: resolvedFrom } : {}),
+      source: SOURCE,
+    };
+  }
+
+  const out: Record<string, unknown> = {};
+  const totals: Record<string, number> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (Array.isArray(v)) {
+      totals[k] = v.length;
+      out[k] = v.slice(0, limit);
+    } else {
+      out[k] = v;
+    }
+  }
+
+  return {
+    found: true,
+    corporate_number: cn,
+    name: row.name ?? null,
+    location: row.location ?? null,
+    ...(resolvedFrom ? { resolved_from: resolvedFrom } : {}),
+    ...(Object.keys(totals).length ? { total_on_record: totals } : {}),
+    [field]: out,
+    source: SOURCE,
+  };
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case 'gbiz_company_search':
@@ -1077,9 +1187,12 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return companyLeg(args, 'subsidy', 'subsidy', 'government subsidies');
     case 'gbiz_company_records': {
       const kind = String(args.kind ?? '').toLowerCase();
-      const leg = RECORD_KINDS[kind];
-      if (!leg) bad(`"${args.kind}" is not a gBizINFO record kind. Use one of: ${Object.keys(RECORD_KINDS).join(', ')}. For procurement awards use gbiz_company_procurement, and for subsidies gbiz_company_subsidies.`);
-      return companyLeg(args, leg, leg, `${kind} records`);
+      const spec = RECORD_KINDS[kind];
+      if (!spec) bad(`"${args.kind}" is not a gBizINFO record kind. Use one of: ${Object.keys(RECORD_KINDS).join(', ')}. For procurement awards use gbiz_company_procurement, and for subsidies gbiz_company_subsidies.`);
+      const label = kind === 'workplace' ? 'workplace statistics' : kind === 'finance' ? 'filed financial results' : `${kind} records`;
+      return spec.shape === 'object'
+        ? companyObjectLeg(args, spec.leg, spec.field, label)
+        : companyLeg(args, spec.leg, spec.field, label);
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
