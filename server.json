@@ -3,7 +3,7 @@
   "name": "io.github.pipeworx-io/gbizinfo",
   "title": "Gbizinfo",
   "description": "gBizINFO — Japanese corporate registry, from METI (経済産業省).",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://pipeworx.io/packs/gbizinfo",
   "repository": {
     "url": "https://github.com/pipeworx-io/mcp-gbizinfo",
