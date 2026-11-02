@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-gbizinfo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "gBizINFO — Japanese corporate registry, from METI (経済産業省).",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "gbizinfo",
     "gatewaySlug": "gbizinfo",
-    "sourceHash": "v1-8187ed8e16d90cb4db435dc49edad18b44672509e3f5b8a4b227354b6bca9101",
-    "sourceCommit": "bb047243cf27f32453103de186b8e6a8b6a1ce79"
+    "sourceHash": "v1-f88072edb85c89a599b4a71c5ec399b017420db0e04221c4e9cd41a241fc3999",
+    "sourceCommit": "030233f6b150a38a44421f88a5fcbad123f0fea8"
   }
 }
